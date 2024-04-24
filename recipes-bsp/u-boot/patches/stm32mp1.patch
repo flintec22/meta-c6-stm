@@ -1,0 +1,1587 @@
+--- a/board/st/stm32mp1/stm32mp1.c	2022-05-10 17:30:11.707051000 +0200
++++ b/board/st/stm32mp1/stm32mp1.c	2022-05-11 10:48:27.498955047 +0200
+@@ -21,7 +21,6 @@
+ #include <i2c.h>
+ #include <regmap.h>
+ #include <init.h>
+-#include <led.h>
+ #include <log.h>
+ #include <malloc.h>
+ #include <misc.h>
+@@ -50,6 +49,10 @@
+ #include <power/regulator.h>
+ #include <tee/optee.h>
+ #include <usb/dwc2_udc.h>
++#include <spi.h>
++
++/* Set to one if building for the Nous Mk2 board. */
++#define APP_NOUS_MK2_BOARD    0
+ 
+ /* SYSCFG registers */
+ #define SYSCFG_BOOTR		0x00
+@@ -88,6 +91,866 @@
+ #define USB_START_LOW_THRESHOLD_UV	1230000
+ #define USB_START_HIGH_THRESHOLD_UV	2150000
+ 
++/* Vendor specific initialization command sequence for GC9503V IC */
++
++// Variant 1 - Display type made by HIFAY
++const unsigned char s_gc9503cmds_1[] =
++{
++       1, 0x01, // Software Reset
++       3, 0x00, // Long delay
++
++       // Display off
++       1, 0x28,
++       3, 0x00, // Long delay
++
++       // Read second byte of the display ID
++       4, 0xDB,
++
++       // Sleep In & Booster off
++       1, 0x10,
++       3, 0x00, // Long delay
++
++       // EXTC Command 'Set page 0 enable register'
++       1, 0xF0, 0, 0x55, 0, 0xAA, 0, 0x52, 0, 0x08, 0, 0x00, // Unlock magic.
++
++       // OTP_CTL
++       1, 0xF6, 0, 0x5A, 0, 0x87,
++
++       //
++       1, 0xC1, 0, 0x3F,
++
++       //
++       1, 0xC2, 0, 0x0E,
++
++       //
++       1, 0xC6, 0, 0xF8,
++
++       //
++       1, 0xC9, 0, 0x10,
++
++       //
++       1, 0xCD, 0, 0x25,
++
++       //
++       1, 0xF8, 0, 0x8A,
++
++       //
++       1, 0xAC, 0, 0x65,
++
++       //
++       1, 0xA7, 0, 0x47,
++
++       // CHP_CTL5
++       1, 0xA0, 0, 0x88,
++
++       //
++       1, 0xFA, 0, 0x02, 0, 0x02, 0, 0x02,
++
++       //
++       1, 0xA3, 0, 0x2E,
++
++       //
++       1, 0xFD, 0, 0x28, 0, 0x3C, 0, 0x00,
++
++       //
++       1, 0x71, 0, 0x48,
++
++       //
++       1, 0x72, 0, 0x48,
++
++       //
++       1, 0x73, 0, 0x00, 0, 0x44,
++
++       //
++       1, 0x97, 0, 0xEE,
++
++       //
++       1, 0x83, 0, 0x93,
++
++       // VREG_CTL4
++       1, 0x9A, 0, 0xB5,
++
++       // VREG_CTL5
++       1, 0x9B, 0, 0x2C,
++
++       // VREG_CTL1
++       1, 0x82, 0, 0x30, 0, 0x30,
++
++       // DISPLAY_CTL
++       1, 0xB1, 0, 0x10,
++
++       //
++       1, 0x7A, 0, 0x13, 0, 0x1A,
++
++       //
++       1, 0x7B, 0, 0x13, 0, 0x1A,
++
++       // CHP_CTL1
++       1, 0x86, 0, 0x99, 0, 0xA3, 0, 0xA3, 0, 0x61,
++
++       //
++       1, 0x6D, 0, 0x00, 0, 0x1D, 0, 0x0A, 0, 0x10, 0, 0x08, 0, 0x1F, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, \
++                0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1F, 0, 0x01, 0, 0x0F, 0, 0x09, 0, 0x1D, 0, 0x00,
++
++       //
++       1, 0x64, 0, 0x18, 0, 0x04, 0, 0x03, 0, 0xC7, 0, 0x03, 0, 0x03, 0, 0x18, 0, 0x03, 0, 0x03, 0, 0xC6, 0, 0x03, 0, 0x03, 0, 0x0B, 0, 0x7A, 0, 0x0B, 0, 0x7A,
++
++       //
++       1, 0x67, 0, 0x18, 0, 0x02, 0, 0x03, 0, 0xC5, 0, 0x03, 0, 0x03, 0, 0x18, 0, 0x01, 0, 0x03, 0, 0xC4, 0, 0x03, 0, 0x03, 0, 0x0B, 0, 0x7A, 0, 0x0B, 0, 0x7A,
++
++       //
++       1, 0x60, 0, 0x18, 0, 0x06, 0, 0x0B, 0, 0x7A, 0, 0x18, 0, 0x02, 0, 0x0B, 0, 0x7A,
++
++       //
++       1, 0x63, 0, 0x18, 0, 0x02, 0, 0x0B, 0, 0x7A, 0, 0x18, 0, 0x05, 0, 0x0B, 0, 0x7A,
++
++       //
++       1, 0x69, 0, 0x14, 0, 0x22, 0, 0x14, 0, 0x22, 0, 0x44, 0, 0x22, 0, 0x08,
++
++       //
++       1, 0xD1, 0, 0x00, 0, 0x00, 0, 0x00, 0, 0x10, 0, 0x00, 0, 0x46, 0, 0x00, 0, 0x5F, 0, 0x00, 0, 0x7B, 0, 0x00, 0, 0xA5, 0, 0x00, 0, 0xC8, 0, 0x00, 0, 0xFF, 0, 0x01, \
++                0, 0x29, 0, 0x01, 0, 0x6E, 0, 0x01, 0, 0xA7, 0, 0x01, 0, 0xFA, 0, 0x02, 0, 0x3D, 0, 0x02, 0, 0x3F, 0, 0x02, 0, 0x7D, 0, 0x02, 0, 0xCA, 0, 0x03, 0, 0x00, \
++                0, 0x03, 0, 0x4A, 0, 0x03, 0, 0x85, 0, 0x03, 0, 0xA9, 0, 0x03, 0, 0xC8, 0, 0x03, 0, 0xE8, 0, 0x03, 0, 0xF0, 0, 0x03, 0, 0xF5, 0, 0x03, 0, 0xFE, 0, 0x03, 0, 0xFF,
++
++       //
++       1, 0xD2, 0, 0x00, 0, 0x00, 0, 0x00, 0, 0x10, 0, 0x00, 0, 0x46, 0, 0x00, 0, 0x5F, 0, 0x00, 0, 0x7B, 0, 0x00, 0, 0xA5, 0, 0x00, 0, 0xC8, 0, 0x00, 0, 0xFF, 0, 0x01, \
++                0, 0x29, 0, 0x01, 0, 0x6E, 0, 0x01, 0, 0xA7, 0, 0x01, 0, 0xFA, 0, 0x02, 0, 0x3D, 0, 0x02, 0, 0x3F, 0, 0x02, 0, 0x7D, 0, 0x02, 0, 0xCA, 0, 0x03, 0, 0x00, \
++                0, 0x03, 0, 0x4A, 0, 0x03, 0, 0x85, 0, 0x03, 0, 0xA9, 0, 0x03, 0, 0xC8, 0, 0x03, 0, 0xE8, 0, 0x03, 0, 0xF0, 0, 0x03, 0, 0xF5, 0, 0x03, 0, 0xFE, 0, 0x03, 0, 0xFF,
++
++       //
++       1, 0xD3, 0, 0x00, 0, 0x00, 0, 0x00, 0, 0x10, 0, 0x00, 0, 0x46, 0, 0x00, 0, 0x5F, 0, 0x00, 0, 0x7B, 0, 0x00, 0, 0xA5, 0, 0x00, 0, 0xC8, 0, 0x00, 0, 0xFF, 0, 0x01, \
++                0, 0x29, 0, 0x01, 0, 0x6E, 0, 0x01, 0, 0xA7, 0, 0x01, 0, 0xFa, 0, 0x02, 0, 0x3D, 0, 0x02, 0, 0x3F, 0, 0x02, 0, 0x7D, 0, 0x02, 0, 0xCA, 0, 0x03, 0, 0x00, \
++                0, 0x03, 0, 0x4A, 0, 0x03, 0, 0x85, 0, 0x03, 0, 0xA9, 0, 0x03, 0, 0xC8, 0, 0x03, 0, 0xE8, 0, 0x03, 0, 0xF0, 0, 0x03, 0, 0xF5, 0, 0x03, 0, 0xFE, 0, 0x03, 0, 0xFF,
++
++       //
++       1, 0xD4, 0, 0x00, 0, 0x00, 0, 0x00, 0, 0x10, 0, 0x00, 0, 0x46, 0, 0x00, 0, 0x5F, 0, 0x00, 0, 0x7B, 0, 0x00, 0, 0xA5, 0, 0x00, 0, 0xC8, 0, 0x00, 0, 0xFF, 0, 0x01, \
++                0, 0x29, 0, 0x01, 0, 0x6E, 0, 0x01, 0, 0xA7, 0, 0x01, 0, 0xFA, 0, 0x02, 0, 0x3D, 0, 0x02, 0, 0x3F, 0, 0x02, 0, 0x7D, 0, 0x02, 0, 0xCA, 0, 0x03, 0, 0x00, \
++                0, 0x03, 0, 0x4A, 0, 0x03, 0, 0x85, 0, 0x03, 0, 0xA9, 0, 0x03, 0, 0xC8, 0, 0x03, 0, 0xE8, 0, 0x03, 0, 0xF0, 0, 0x03, 0, 0xF5, 0, 0x03, 0, 0xFE, 0, 0x03, 0, 0xFF,
++
++       //
++       1, 0xD5, 0, 0x00, 0, 0x00, 0, 0x00, 0, 0x10, 0, 0x00, 0, 0x46, 0, 0x00, 0, 0x5F, 0, 0x00, 0, 0x7B, 0, 0x00, 0, 0xA5, 0, 0x00, 0, 0xC8, 0, 0x00, 0, 0xFF, 0, 0x01, \
++                0, 0x29, 0, 0x01, 0, 0x6E, 0, 0x01, 0, 0xA7, 0, 0x01, 0, 0xFA, 0, 0x02, 0, 0x3D, 0, 0x02, 0, 0x3F, 0, 0x02, 0, 0x7D, 0, 0x02, 0, 0xCA, 0, 0x03, 0, 0x00, \
++                0, 0x03, 0, 0x4A, 0, 0x03, 0, 0x85, 0, 0x03, 0, 0xA9, 0, 0x03, 0, 0xC8, 0, 0x03, 0, 0xE8, 0, 0x03, 0, 0xF0, 0, 0x03, 0, 0xF5, 0, 0x03, 0, 0xFE, 0, 0x03, 0, 0xFF,
++
++       //
++       1, 0xD6, 0, 0x00, 0, 0x00, 0, 0x00, 0, 0x10, 0, 0x00, 0, 0x46, 0, 0x00, 0, 0x5F, 0, 0x00, 0, 0x7B, 0, 0x00, 0, 0xA5, 0, 0x00, 0, 0xC8, 0, 0x00, 0, 0xFF, 0, 0x01, \
++                0, 0x29, 0, 0x01, 0, 0x6E, 0, 0x01, 0, 0xA7, 0, 0x01, 0, 0xFA, 0, 0x02, 0, 0x3D, 0, 0x02, 0, 0x3F, 0, 0x02, 0, 0x7D, 0, 0x02, 0, 0xCA, 0, 0x03, 0, 0x00, \
++                0, 0x03, 0, 0x4A, 0, 0x03, 0, 0x85, 0, 0x03, 0, 0xA9, 0, 0x03, 0, 0xC8, 0, 0x03, 0, 0xE8, 0, 0x03, 0, 0xF0, 0, 0x03, 0, 0xF5, 0, 0x03, 0, 0xFE, 0, 0x03, 0, 0xFF,
++
++       // Interface Pixel Format
++       1, 0x3A, 0, 0x77,
++
++       // RGB Interface Signals Control
++       1, 0xB0, 0, 0x0B, 0, 0x08, 0, 0x10, 0, 0x1E, 0, 0x1E,
++
++       // Sleep Out & Booster on
++       1, 0x11,
++
++       // Long delay
++       3, 0x00,
++
++       // Display on
++       1, 0x29,
++       
++       // All pixels off
++       1, 0x22,
++
++       // Long delay
++       3, 0x00,
++
++       // Idle mode off
++       1, 0x38,
++
++       // Turn display to normal mode. This turns partial mode off.
++       1, 0x13,
++};
++
++// Variant 2 - Display type made by Chance
++const unsigned char s_gc9503cmds_2[] =
++{
++        // Sleep In & Booster off
++        1, 0x10,
++        3, 0x00, // Long delay
++
++        // EXTC Command 'Set page 0 enable register'
++        1, 0xF0, 0, 0x55, 0, 0xAA, 0, 0x52, 0, 0x08, 0, 0x00, // Unlock magic.
++
++        // OTP_CTL
++        1, 0xF6, 0, 0x5A, 0, 0x87,
++
++        //
++        1, 0xC1, 0, 0x3F,
++
++        //
++        //1, 0xC2, 0, 0x0E,
++
++        //
++        //1, 0xC6, 0, 0xF8,
++
++        //
++        1, 0xC9, 0, 0x10,
++
++        //
++        1, 0xCD, 0, 0x25,
++
++        //
++        1, 0xF8, 0, 0x8A,
++
++        //
++        1, 0xAC, 0, 0x45,
++
++        //
++        1, 0xA7, 0, 0x47,
++
++        // CHP_CTL5
++        1, 0xA0, 0, 0xDD,
++
++        // CHP_CTL1
++        1, 0x86, 0, 0x99, 0, 0xA3, 0, 0xA3, 0, 0x51,
++
++        //
++        1, 0xFA, 0, 0x08, 0, 0x08, 0, 0x00, 0, 0x04,
++
++        //
++        1, 0xA3, 0, 0x62,
++
++        //
++        1, 0xFD, 0, 0x28, 0, 0x28, 0, 0x00,
++
++        //
++        //1, 0x71, 0, 0x48,
++
++        //
++        //1, 0x72, 0, 0x48,
++
++        //
++        //1, 0x73, 0, 0x00, 0, 0x44,
++
++        //
++        //1, 0x97, 0, 0xEE,
++
++        //
++        //1, 0x83, 0, 0x93,
++
++        // VREG_CTL4
++        1, 0x9A, 0, 0x91,
++
++        // VREG_CTL5
++        1, 0x9B, 0, 0x51,
++
++        // VREG_CTL1
++        1, 0x82, 0, 0x35, 0, 0x35,
++
++        // DISPLAY_CTL
++        1, 0xB1, 0, 0x10, // 0x90
++
++        //
++        1, 0x7A, 0, 0x13, 0, 0x1A,
++
++        //
++        1, 0x7B, 0, 0x13, 0, 0x1A,
++
++        //
++        1, 0x6D, 0, 0x00, 0, 0x1F, 0, 0x19, 0, 0x1A, 0, 0x10, 0, 0x0E, 0, 0x0C, 0, 0x0A, 0, 0x02, 0, 0x08, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x1E, 0, 0x07, 0, 0x01, 0, 0x09, 0, 0x0B, 0, 0x0D, 0, 0x0F, 0, 0x1B, 0, 0x1C, 0, 0x1F, 0, 0x00,
++
++        //
++        1, 0x60, 0, 0x38, 0, 0x06, 0, 0x1C, 0, 0x7A, 0, 0x38, 0, 0x05, 0, 0x1C, 0, 0x7A,
++
++        //
++        1, 0x63, 0, 0x33, 0, 0xBE, 0, 0x1C, 0, 0x7A, 0, 0x33, 0, 0xBF, 0, 0x1C, 0, 0x7A,
++
++        //
++        1, 0x64, 0, 0x38, 0, 0x04, 0, 0x03, 0, 0xBC, 0, 0x03, 0, 0x03, 0, 0x38, 0, 0x03, 0, 0x03, 0, 0xBD, 0, 0x03, 0, 0x03, 0, 0x01, 0, 0x7A, 0, 0x01, 0, 0x7A,
++
++        //
++        1, 0x65, 0, 0x38, 0, 0x02, 0, 0x03, 0, 0xBE, 0, 0x03, 0, 0x03, 0, 0x38, 0, 0x01, 0, 0x03, 0, 0xBF, 0, 0x03, 0, 0x03, 0, 0x01, 0, 0x7A, 0, 0x01, 0, 0x7A,
++
++        //
++        1, 0x66, 0, 0x30, 0, 0x00, 0, 0x03, 0, 0xC0, 0, 0x03, 0, 0x03, 0, 0x30, 0, 0x01, 0, 0x03, 0, 0xC1, 0, 0x03, 0, 0x03, 0, 0x01, 0, 0x7A, 0, 0x01, 0, 0x7A,
++
++        //
++        1, 0x67, 0, 0x30, 0, 0x02, 0, 0x03, 0, 0xC2, 0, 0x03, 0, 0x03, 0, 0x30, 0, 0x03, 0, 0x03, 0, 0xC3, 0, 0x03, 0, 0x03, 0, 0x01, 0, 0x7A, 0, 0x01, 0, 0x7A,
++
++        //
++        1, 0x68, 0, 0x3D, 0, 0x08, 0, 0x06, 0, 0x08, 0, 0x06, 0, 0x00, 0, 0x00, 0, 0x08, 0, 0x06, 0, 0x08, 0, 0x06, 0, 0x00, 0, 0x23,
++
++        //
++        1, 0x69, 0, 0x14, 0, 0x22, 0, 0x14, 0, 0x22, 0, 0x44, 0, 0x22, 0, 0x08,
++
++        //
++        1, 0x6B, 0, 0x07,
++
++        //
++        1, 0xD1, 0, 0x00, 0, 0x00, 0, 0x00, 0, 0x1A, 0, 0x00, 0, 0x42, 0, 0x00, 0, 0x62, 0, 0x00, 0, 0x7C, 0, 0x00, 0, 0xA9, 0, 0x00, 0, 0xCD, 0, 0x01, 0, 0x07, 0, 0x01, \
++                 0, 0x34, 0, 0x01, 0, 0x7F, 0, 0x01, 0, 0xBC, 0, 0x02, 0, 0x1A, 0, 0x02, 0, 0x66, 0, 0x02, 0, 0x68, 0, 0x02, 0, 0xAF, 0, 0x02, 0, 0xFB, 0, 0x03, 0, 0x2B, \
++                 0, 0x03, 0, 0x6B, 0, 0x03, 0, 0x95, 0, 0x03, 0, 0xB2, 0, 0x03, 0, 0xBF, 0, 0x03, 0, 0xD1, 0, 0x03, 0, 0xDA, 0, 0x03, 0, 0xE7, 0, 0x03, 0, 0xFB, 0, 0x03, 0, 0xFF,
++
++        //
++        1, 0xD2, 0, 0x00, 0, 0x00, 0, 0x00, 0, 0x1A, 0, 0x00, 0, 0x42, 0, 0x00, 0, 0x62, 0, 0x00, 0, 0x7C, 0, 0x00, 0, 0xA9, 0, 0x00, 0, 0xCD, 0, 0x01, 0, 0x07, 0, 0x01, \
++                 0, 0x34, 0, 0x01, 0, 0x7F, 0, 0x01, 0, 0xBC, 0, 0x02, 0, 0x1A, 0, 0x02, 0, 0x66, 0, 0x02, 0, 0x68, 0, 0x02, 0, 0xAF, 0, 0x02, 0, 0xFB, 0, 0x03, 0, 0x2B, \
++                 0, 0x03, 0, 0x6B, 0, 0x03, 0, 0x95, 0, 0x03, 0, 0xB2, 0, 0x03, 0, 0xBF, 0, 0x03, 0, 0xD1, 0, 0x03, 0, 0xDA, 0, 0x03, 0, 0xE7, 0, 0x03, 0, 0xFB, 0, 0x03, 0, 0xFF,
++
++        //
++        1, 0xD3, 0, 0x00, 0, 0x00, 0, 0x00, 0, 0x1A, 0, 0x00, 0, 0x42, 0, 0x00, 0, 0x62, 0, 0x00, 0, 0x7C, 0, 0x00, 0, 0xA9, 0, 0x00, 0, 0xCD, 0, 0x01, 0, 0x07, 0, 0x01, \
++                 0, 0x34, 0, 0x01, 0, 0x7F, 0, 0x01, 0, 0xBC, 0, 0x02, 0, 0x1A, 0, 0x02, 0, 0x66, 0, 0x02, 0, 0x68, 0, 0x02, 0, 0xAF, 0, 0x02, 0, 0xFB, 0, 0x03, 0, 0x2B, \
++                 0, 0x03, 0, 0x6B, 0, 0x03, 0, 0x95, 0, 0x03, 0, 0xB2, 0, 0x03, 0, 0xBF, 0, 0x03, 0, 0xD1, 0, 0x03, 0, 0xDA, 0, 0x03, 0, 0xE7, 0, 0x03, 0, 0xFB, 0, 0x03, 0, 0xFF,
++
++        //
++        1, 0xD4, 0, 0x00, 0, 0x00, 0, 0x00, 0, 0x1A, 0, 0x00, 0, 0x42, 0, 0x00, 0, 0x62, 0, 0x00, 0, 0x7C, 0, 0x00, 0, 0xA9, 0, 0x00, 0, 0xCD, 0, 0x01, 0, 0x07, 0, 0x01, \
++                 0, 0x34, 0, 0x01, 0, 0x7F, 0, 0x01, 0, 0xBC, 0, 0x02, 0, 0x1A, 0, 0x02, 0, 0x66, 0, 0x02, 0, 0x68, 0, 0x02, 0, 0xAF, 0, 0x02, 0, 0xFB, 0, 0x03, 0, 0x2B, \
++                 0, 0x03, 0, 0x6B, 0, 0x03, 0, 0x95, 0, 0x03, 0, 0xB2, 0, 0x03, 0, 0xBF, 0, 0x03, 0, 0xD1, 0, 0x03, 0, 0xDA, 0, 0x03, 0, 0xE7, 0, 0x03, 0, 0xFB, 0, 0x03, 0, 0xFF,
++
++        //
++        1, 0xD5, 0, 0x00, 0, 0x00, 0, 0x00, 0, 0x1A, 0, 0x00, 0, 0x42, 0, 0x00, 0, 0x62, 0, 0x00, 0, 0x7C, 0, 0x00, 0, 0xA9, 0, 0x00, 0, 0xCD, 0, 0x01, 0, 0x07, 0, 0x01, \
++                 0, 0x34, 0, 0x01, 0, 0x7F, 0, 0x01, 0, 0xBC, 0, 0x02, 0, 0x1A, 0, 0x02, 0, 0x66, 0, 0x02, 0, 0x68, 0, 0x02, 0, 0xAF, 0, 0x02, 0, 0xFB, 0, 0x03, 0, 0x2B, \
++                 0, 0x03, 0, 0x6B, 0, 0x03, 0, 0x95, 0, 0x03, 0, 0xB2, 0, 0x03, 0, 0xBF, 0, 0x03, 0, 0xD1, 0, 0x03, 0, 0xDA, 0, 0x03, 0, 0xE7, 0, 0x03, 0, 0xFB, 0, 0x03, 0, 0xFF,
++
++        //
++        1, 0xD6, 0, 0x00, 0, 0x00, 0, 0x00, 0, 0x1A, 0, 0x00, 0, 0x42, 0, 0x00, 0, 0x62, 0, 0x00, 0, 0x7C, 0, 0x00, 0, 0xA9, 0, 0x00, 0, 0xCD, 0, 0x01, 0, 0x07, 0, 0x01, \
++                 0, 0x34, 0, 0x01, 0, 0x7F, 0, 0x01, 0, 0xBC, 0, 0x02, 0, 0x1A, 0, 0x02, 0, 0x66, 0, 0x02, 0, 0x68, 0, 0x02, 0, 0xAF, 0, 0x02, 0, 0xFB, 0, 0x03, 0, 0x2B, \
++                 0, 0x03, 0, 0x6B, 0, 0x03, 0, 0x95, 0, 0x03, 0, 0xB2, 0, 0x03, 0, 0xBF, 0, 0x03, 0, 0xD1, 0, 0x03, 0, 0xDA, 0, 0x03, 0, 0xE7, 0, 0x03, 0, 0xFB, 0, 0x03, 0, 0xFF,
++
++        // Interface Pixel Format
++        1, 0x3A, 0, 0x77,
++
++        // RGB Interface Signals Control
++        1, 0xB0, 0, 0x0B, 0, 0x08, 0, 0x10, 0, 0x1E, 0, 0x1E,
++
++       // Sleep Out & Booster on
++       1, 0x11,
++
++       // Long delay
++       3, 0x00,
++
++       // Display on
++       1, 0x29,
++       
++       // All pixels off
++       1, 0x22,
++
++       // Long delay
++       3, 0x00,
++
++       // Idle mode off
++       1, 0x38,
++
++       // Turn display to normal mode. This turns partial mode off.
++       1, 0x13,
++};
++
++void init_gc9503v_display_cntrl(void)
++{
++    int i, k, ival;
++    int len, sze;
++    const unsigned char* pb;
++    unsigned char* ps;
++    struct spi_slave *slave;
++    struct udevice *dev;
++    char name[30], *str;
++    unsigned char txbuf[400];
++    unsigned char rxbuf[400];
++    
++    printf("\nInitialize GC9503V display controller via SPI. ");
++
++    /* Setup GPIO. */
++	
++    if (gpio_request(94 /*PF14*/, "WR_DISPLAY") == -1)
++    {
++        printf("init_gc9503v_display_cntrl() - GPIO request failed for PF14 (94)\n");  
++    }
++    else
++    {
++        gpio_direction_output(94 /*PF14 WR_DISPLAY*/, 0);
++
++        /* Setup SPI. */
++
++        slave = 0;
++        snprintf(name, sizeof(name), "generic_%d:%d", 5 /*SPI5*/, 0 /*NPCS0*/);
++        str = strdup(name);
++
++        if (str)
++        {
++            if (spi_get_bus_and_cs(5 /*SPI5*/, 0 /*NPCS0*/, 8000000/*32000000*/, SPI_MODE_0/*SPI_CS_HIGH*/, 
++                                   "spi_generic_drv", str, &dev, &slave))
++            {
++                slave = 0;
++            }
++        }
++
++        if (slave)
++        {
++            /* Chip select */
++
++            if (spi_claim_bus(slave))
++            {
++                printf("init_gc9503v_display_cntrl() - spi_claim_bus() failed\n");  
++            }
++            else
++            {
++                mdelay(50);
++
++                /* Transmit initialization sequence. */
++
++                pb  = s_gc9503cmds_1;
++                len = (sizeof(s_gc9503cmds_1)) >> 1;
++                sze = 0;
++
++                for (i = 0; i < len; i++)
++                {
++                    switch (*pb)
++                    {
++                        case 3: // Delay long
++                            mdelay(100);  // 100 ms
++                        break;
++
++                        case 2: // Delay short
++                            mdelay(10);  // 10 ms
++                        break;
++
++                        case 1: // Command
++                            // Set "Command/Data" pin to low.
++
++                            gpio_direction_output(94 /*PF14 WR_DISPLAY*/, 0);
++                            udelay(20);
++                            spi_xfer(slave, 8, pb + 1, rxbuf, SPI_XFER_BEGIN | SPI_XFER_END);
++                        break;
++
++                        case 4: // Read display identification register
++                            rxbuf[0] = 0;
++
++                            gpio_direction_output(94 /*PF14 WR_DISPLAY*/, 0);
++
++                            udelay(20);
++
++                            ival = 0;
++
++                            for (k = 0; k < 3; k++)
++                            {
++                                txbuf[0] = *(pb + 1);
++                            
++                                if (spi_xfer(slave, 8, txbuf, NULL, SPI_XFER_BEGIN))
++                                {
++                                    printf("spi_xfer(tx, SPI_XFER_BEGIN) error");
++                                }
++                                else if (spi_xfer(slave, 8, NULL, rxbuf, SPI_XFER_END))
++                                {
++                                    printf("spi_xfer(rx) error");
++                                }
++
++                                mdelay(10);
++
++                                /* Check the ID indicating this to be a HIFAY display. */
++
++                                if (rxbuf[0] == 0x95)
++                                {
++                                    ival = 0;
++                                    break;
++                                }
++
++                                if (!rxbuf[0])
++                                {
++                                    ival++;
++                                }
++                            }
++
++                            // If we have detected the second display variant, proceed with the second table.
++
++                            if (ival >= 2 /* At least two out of three ID results indicate that this is a CHANCE display. */)
++                            {
++                                printf("CHANCE display detected 0x%02X\n", rxbuf[0]);
++
++                                if ((pb >= s_gc9503cmds_1) && (pb < (s_gc9503cmds_1 + sizeof(s_gc9503cmds_1))))
++                                {
++                                    pb  = s_gc9503cmds_2;
++                                    len = (sizeof(s_gc9503cmds_2)) >> 1;
++                                    i = -1;
++                                    mdelay(5);
++
++                                    // Executed loop test part immediately; control passes to the increment step.
++
++                                    continue;
++                                }
++                            }
++                            else
++                            {
++                                printf("HIFAY display detected 0x%02X\n", rxbuf[0]);
++                            }
++                        break;
++
++                        case 0: // Send Data
++                            ps  = txbuf;
++                            sze = 0;
++
++                            do
++                            {
++                                /* Copy data. */
++
++                                *ps++ = *(pb + 1);
++
++                                sze++;
++
++                                pb += 2;
++
++                                /* Check table len. */
++
++                                if (++i >= len)
++                                {
++                                    break;
++                                }
++                            }
++                            while (!(*pb) /* Still data bytes? */);
++
++                            /* Mind the increment at the end of the loop. */
++
++                            pb -= 2;
++
++                            i--;
++
++                            // Set "Command/Data" pin to high.
++
++                            gpio_direction_output(94 /*PF14 WR_DISPLAY*/, 1);
++                            udelay(20);
++                            spi_xfer(slave, sze << 3, txbuf, rxbuf, SPI_XFER_BEGIN | SPI_XFER_END);
++                            break;
++
++                        default:
++                            break;
++                    }
++
++                    /* Short delay after the last command. */
++
++                    mdelay(5);
++
++                    /* Next command. */
++
++                    pb += 2;
++                }
++
++                mdelay(25);
++
++                /* Release the SPI. */
++
++                spi_release_bus(slave);
++            }
++
++            spi_free_slave(slave);
++        }
++        
++        gpio_direction_output(94 /*PF14 WR_DISPLAY*/, 0);
++        gpio_free(94 /*PF14*/);
++    }
++
++    printf("Done.\n");
++}
++
++void init_board_gpios_ios(void)
++{
++    /* Setup the background light of the display and turn it on. */
++    
++    if (gpio_request(83 /*PF3 Back light*/, "BACK_LIGHT") != -1)
++    {
++        gpio_direction_output(83 /*PF3 Back light*/, 1);
++    }
++	
++    /* Setup GPIOs used later on for the shift registers. */
++
++    if (gpio_request(27 /*PB11*/, "SR_DATA_IN") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PB11 (27)\n");
++    }
++    else
++    {
++        gpio_direction_output(27 /*PB11*/, 0);
++        gpio_free(27 /*PB11*/);
++    }
++
++    if (gpio_request(13 /*PA13*/, "SR_CLK") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PA13 (13)\n");
++    }
++    else
++    {
++        gpio_direction_output(13 /*PA13*/, 0);
++        gpio_free(13 /*PA13*/);
++    }
++
++    if (gpio_request(3 /*PA3*/, "SR_EN_OUT") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PA3 (3)\n");
++    }
++    else
++    {
++        gpio_direction_output(3 /*PA3*/, 0);
++        gpio_free(3 /*PA3*/);
++    }
++
++    if (gpio_request(14 /*PA14*/, "SR_STR_CPU") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PA14 (14)\n");
++    }
++    else
++    {
++        gpio_direction_output(14 /*PA14*/, 0);
++        gpio_free(14 /*PA14*/);
++    }
++
++    if (gpio_request(57 /*PD9*/, "SR_LD_IN") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PD9 (57)\n");
++    }
++    else
++    {
++        gpio_direction_output(57 /*PD9*/, 0);
++        gpio_free(57 /*PD9*/);
++    }
++
++    if (gpio_request(64 /*PE0*/, "AT_ZON_SET") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PE0 (64)\n");
++    }
++    else
++    {
++        gpio_direction_output(64 /*PE0*/, 0);
++        gpio_free(64 /*PE0*/);
++    }
++
++    if (gpio_request(111 /*PG15*/, "AT_ZON_RES") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PG15 (111)\n");
++    }
++    else
++    {
++        gpio_direction_output(111 /*PG15*/, 0);
++        gpio_free(111 /*PG15*/);
++    }
++
++    if (gpio_request(98 /*PG2*/, "EN_BR_SC") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PG2 (98)\n");
++    }
++    else
++    {
++        gpio_direction_output(98 /*PG2*/, 0);
++        gpio_free(98 /*PG2*/);
++    }
++
++    if (gpio_request(138 /*PI10*/, "SR_EXP_STR") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PI10 (138)\n");
++    }
++    else
++    {
++        gpio_direction_output(138 /*PI10*/, 0);
++        gpio_free(138 /*PI10*/);
++    }
++
++    if (gpio_request(88 /*PF8*/, "CAN1_STAT") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PF8 (88)\n");
++    }
++    else
++    {
++        gpio_direction_output(88 /*PF8*/, 0);
++        gpio_free(88 /*PF8*/);
++    }
++
++    if (gpio_request(87 /*PF7*/, "CAN1_ERR") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PF7 (87)\n");
++    }
++    else
++    {
++        gpio_direction_output(87 /*PF7*/, 0);
++        gpio_free(87 /*PF7*/);
++    }
++
++    if (gpio_request(106 /*PG10*/, "CAN2_STAT") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PG10 (106)\n");
++    }
++    else
++    {
++        gpio_direction_output(106 /*PG10*/, 0);
++        gpio_free(106 /*PG10*/);
++    }
++
++    if (gpio_request(103 /*PG7*/, "CAN2_ERR") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PG7 (103)\n");
++    }
++    else
++    {
++        gpio_direction_output(103 /*PG7*/, 0);
++        gpio_free(103 /*PG7*/);
++    }
++
++    if (gpio_request(15 /*PA15*/, "DCP_DIR") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PA15 (15)\n");
++    }
++    else
++    {
++        gpio_direction_output(15 /*PA15*/, 0);
++        gpio_free(15 /*PA15*/);
++    }
++
++    /* Inputs */
++
++    if (gpio_request(66 /*PE2*/, "MON_SB_PRES") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PE2 (66)\n");
++    }
++    else
++    {
++        gpio_direction_input(66 /*PE2*/);
++        gpio_free(66 /*PE2*/);
++    }
++
++    if (gpio_request(6 /*PA6*/, "MON_SZ_PRES") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PA6 (6)\n");
++    }
++    else
++    {
++        gpio_direction_input(6 /*PA6*/);
++        gpio_free(6 /*PA6*/);
++    }
++
++    if (gpio_request(34 /*PC2*/, "SR_EXP_DO") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PC2 (34)\n");
++    }
++    else
++    {
++        gpio_direction_input(34 /*PC2*/);
++        gpio_free(34 /*PC2*/);
++    }
++
++    if (gpio_request(100 /*PG4*/, "PTC_MON") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PG4 (100)\n");
++    }
++    else
++    {
++        gpio_direction_input(100 /*PG4*/);
++        gpio_free(100 /*PG4*/);
++    }
++
++    if (gpio_request(17 /*PB1*/, "IOX_PRES") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PB1 (17)\n");
++    }
++    else
++    {
++        gpio_direction_input(17 /*PB1*/);
++        gpio_free(17 /*PB1*/);
++    }
++
++  #if APP_NOUS_MK2_BOARD
++  
++    if (gpio_request(128 /*PI0*/, "SR_DO_SB") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PI0 (128)\n");
++    }
++    else
++    {
++        gpio_direction_input(128 /*PI0*/);
++        gpio_free(128 /*PI0*/);
++    }
++
++    if (gpio_request(129 /*PI1*/, "SR_STR_SB") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PI1 (129)\n");
++    }
++    else
++    {
++        gpio_direction_output(129 /*PI1*/, 0);
++        gpio_free(129 /*PI1*/);
++    }
++
++    if (gpio_request(130 /*PI2*/, "SR_STR_IO") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PI2 (130)\n");
++    }
++    else
++    {
++        gpio_direction_output(130 /*PI2*/, 0);
++        gpio_free(130 /*PI2*/);
++    }
++
++    if (gpio_request(141 /*PI13*/, "SR_DO_IO") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PI13 (141)\n");
++    }
++    else
++    {
++        gpio_direction_input(141 /*PI13*/);
++        gpio_free(141 /*PI13*/);
++    }
++
++  #endif // #if APP_NOUS_MK2_BOARD
++
++    if (gpio_request(35 /*PC3*/, "SR_DO_CPU") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PC3 (35)\n");
++    }
++    else
++    {
++        gpio_direction_input(35 /*PC3*/);
++        gpio_free(35 /*PC3*/);
++    }
++
++    if (gpio_request(96 /*PG0*/, "DZ_SENSOR") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PG0 (96)\n");
++    }
++    else
++    {
++        gpio_direction_input(96 /*PG0*/);
++        gpio_free(96 /*PG0*/);
++    }
++
++    if (gpio_request(97 /*PG1*/, "DOORS_BRIDGED") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PG1 (97)\n");
++    }
++    else
++    {
++        gpio_direction_input(97 /*PG1*/);
++        gpio_free(97 /*PG1*/);
++    }
++
++    if (gpio_request(406 /*PZ6*/, "CTP_RST") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PZ6 (406)\n");
++    }
++    else
++    {
++        gpio_direction_output(406 /*PZ6*/, 0);
++        gpio_free(406 /*PZ6*/);
++    }
++
++    if (gpio_request(401 /*PZ1*/, "CTP_INT") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PZ1 (401)\n");
++    }
++    else
++    {
++        gpio_direction_input(401 /*PZ1*/);
++        gpio_free(401 /*PZ1*/);
++    }
++
++    if (gpio_request(101 /*PG8*/, "AUDIO_SHDN") == -1)
++    {
++        printf("init_board_gpios_ios() - GPIO request failed for PG8 (101)\n");
++    }
++    else
++    {
++        gpio_direction_output(101 /*PG8*/, 0);
++        gpio_free(101 /*PG8*/);
++    }
++}
++
+ int board_early_init_f(void)
+ {
+ 	/* nothing to do, only used in SPL */
+@@ -115,7 +978,7 @@
+ 	fdt_compat = fdt_getprop(gd->fdt_blob, 0, "compatible",
+ 				 &fdt_compat_len);
+ 
+-	log_info("Board: stm32mp1 in %s mode (%s)\n", mode,
++	log_info("THOR-E2-Board: stm32mp1 in %s mode (%s)\n", mode,
+ 		 fdt_compat && fdt_compat_len ? fdt_compat : "");
+ 
+ 	/* display the STMicroelectronics board identification */
+@@ -138,55 +1001,6 @@
+ 	return 0;
+ }
+ 
+-static void board_key_check(void)
+-{
+-	ofnode node;
+-	struct gpio_desc gpio;
+-	enum forced_boot_mode boot_mode = BOOT_NORMAL;
+-
+-	if (!IS_ENABLED(CONFIG_FASTBOOT) && !IS_ENABLED(CONFIG_CMD_STM32PROG))
+-		return;
+-
+-	node = ofnode_path("/config");
+-	if (!ofnode_valid(node)) {
+-		log_debug("no /config node?\n");
+-		return;
+-	}
+-	if (IS_ENABLED(CONFIG_FASTBOOT)) {
+-		if (gpio_request_by_name_nodev(node, "st,fastboot-gpios", 0,
+-					       &gpio, GPIOD_IS_IN)) {
+-			log_debug("could not find a /config/st,fastboot-gpios\n");
+-		} else {
+-			udelay(20);
+-			if (dm_gpio_get_value(&gpio)) {
+-				log_notice("Fastboot key pressed, ");
+-				boot_mode = BOOT_FASTBOOT;
+-			}
+-
+-			dm_gpio_free(NULL, &gpio);
+-		}
+-	}
+-	if (IS_ENABLED(CONFIG_CMD_STM32PROG)) {
+-		if (gpio_request_by_name_nodev(node, "st,stm32prog-gpios", 0,
+-					       &gpio, GPIOD_IS_IN)) {
+-			log_debug("could not find a /config/st,stm32prog-gpios\n");
+-		} else {
+-			udelay(20);
+-			if (dm_gpio_get_value(&gpio)) {
+-				log_notice("STM32Programmer key pressed, ");
+-				boot_mode = BOOT_STM32PROG;
+-			}
+-			dm_gpio_free(NULL, &gpio);
+-		}
+-	}
+-	if (boot_mode != BOOT_NORMAL) {
+-		log_notice("entering download mode...\n");
+-		clrsetbits_le32(TAMP_BOOT_CONTEXT,
+-				TAMP_BOOT_FORCED_MASK,
+-				boot_mode);
+-	}
+-}
+-
+ static int typec_usb_cable_connected(void)
+ {
+ 	struct udevice *dev;
+@@ -252,220 +1066,6 @@
+ }
+ #endif /* CONFIG_USB_GADGET_DOWNLOAD */
+ 
+-static int get_led(struct udevice **dev, char *led_string)
+-{
+-	char *led_name;
+-	int ret;
+-
+-	led_name = fdtdec_get_config_string(gd->fdt_blob, led_string);
+-	if (!led_name) {
+-		log_debug("could not find %s config string\n", led_string);
+-		return -ENOENT;
+-	}
+-	ret = led_get_by_label(led_name, dev);
+-	if (ret) {
+-		log_debug("get=%d\n", ret);
+-		return ret;
+-	}
+-
+-	return 0;
+-}
+-
+-static int setup_led(enum led_state_t cmd)
+-{
+-	struct udevice *dev;
+-	int ret;
+-
+-	if (!CONFIG_IS_ENABLED(LED))
+-		return 0;
+-
+-	ret = get_led(&dev, "u-boot,boot-led");
+-	if (ret)
+-		return ret;
+-
+-	ret = led_set_state(dev, cmd);
+-	return ret;
+-}
+-
+-static void __maybe_unused led_error_blink(u32 nb_blink)
+-{
+-	int ret;
+-	struct udevice *led;
+-	u32 i;
+-
+-	if (!nb_blink)
+-		return;
+-
+-	if (CONFIG_IS_ENABLED(LED)) {
+-		ret = get_led(&led, "u-boot,error-led");
+-		if (!ret) {
+-			/* make u-boot,error-led blinking */
+-			/* if U32_MAX and 125ms interval, for 17.02 years */
+-			for (i = 0; i < 2 * nb_blink; i++) {
+-				led_set_state(led, LEDST_TOGGLE);
+-				mdelay(125);
+-				WATCHDOG_RESET();
+-			}
+-			led_set_state(led, LEDST_ON);
+-		}
+-	}
+-
+-	/* infinite: the boot process must be stopped */
+-	if (nb_blink == U32_MAX)
+-		hang();
+-}
+-
+-static int adc_measurement(ofnode node, int adc_count, int *min_uV, int *max_uV)
+-{
+-	struct ofnode_phandle_args adc_args;
+-	struct udevice *adc;
+-	unsigned int raw;
+-	int ret, uV;
+-	int i;
+-
+-	for (i = 0; i < adc_count; i++) {
+-		if (ofnode_parse_phandle_with_args(node, "st,adc_usb_pd",
+-						   "#io-channel-cells", 0, i,
+-						   &adc_args)) {
+-			log_debug("can't find /config/st,adc_usb_pd\n");
+-			return 0;
+-		}
+-
+-		ret = uclass_get_device_by_ofnode(UCLASS_ADC, adc_args.node,
+-						  &adc);
+-
+-		if (ret) {
+-			log_err("Can't get adc device(%d)\n", ret);
+-			return ret;
+-		}
+-
+-		ret = adc_channel_single_shot(adc->name, adc_args.args[0],
+-					      &raw);
+-		if (ret) {
+-			log_err("single shot failed for %s[%d]!\n",
+-				adc->name, adc_args.args[0]);
+-			return ret;
+-		}
+-		/* Convert to uV */
+-		if (!adc_raw_to_uV(adc, raw, &uV)) {
+-			if (uV > *max_uV)
+-				*max_uV = uV;
+-			if (uV < *min_uV)
+-				*min_uV = uV;
+-			log_debug("%s[%02d] = %u, %d uV\n",
+-				  adc->name, adc_args.args[0], raw, uV);
+-		} else {
+-			log_err("Can't get uV value for %s[%d]\n",
+-				adc->name, adc_args.args[0]);
+-		}
+-	}
+-
+-	return 0;
+-}
+-
+-static int board_check_usb_power(void)
+-{
+-	ofnode node;
+-	int max_uV = 0;
+-	int min_uV = USB_START_HIGH_THRESHOLD_UV;
+-	int adc_count, ret;
+-	u32 nb_blink;
+-	u8 i;
+-
+-	node = ofnode_path("/config");
+-	if (!ofnode_valid(node)) {
+-		log_debug("no /config node?\n");
+-		return -ENOENT;
+-	}
+-
+-	/*
+-	 * Retrieve the ADC channels devices and get measurement
+-	 * for each of them
+-	 */
+-	adc_count = ofnode_count_phandle_with_args(node, "st,adc_usb_pd",
+-						   "#io-channel-cells", 0);
+-	if (adc_count < 0) {
+-		if (adc_count == -ENOENT)
+-			return 0;
+-
+-		log_err("Can't find adc channel (%d)\n", adc_count);
+-
+-		return adc_count;
+-	}
+-
+-	/* perform maximum of 2 ADC measurements to detect power supply current */
+-	for (i = 0; i < 2; i++) {
+-		ret = adc_measurement(node, adc_count, &min_uV, &max_uV);
+-		if (ret)
+-			return ret;
+-
+-		/*
+-		 * If highest value is inside 1.23 Volts and 2.10 Volts, that means
+-		 * board is plugged on an USB-C 3A power supply and boot process can
+-		 * continue.
+-		 */
+-		if (max_uV > USB_START_LOW_THRESHOLD_UV &&
+-		    max_uV <= USB_START_HIGH_THRESHOLD_UV &&
+-		    min_uV <= USB_LOW_THRESHOLD_UV)
+-			return 0;
+-
+-		if (i == 0) {
+-			log_err("Previous ADC measurements was not the one expected, retry in 20ms\n");
+-			mdelay(20);  /* equal to max tPDDebounce duration (min 10ms - max 20ms) */
+-		}
+-	}
+-
+-	log_notice("****************************************************\n");
+-	/*
+-	 * If highest and lowest value are either both below
+-	 * USB_LOW_THRESHOLD_UV or both above USB_LOW_THRESHOLD_UV, that
+-	 * means USB TYPE-C is in unattached mode, this is an issue, make
+-	 * u-boot,error-led blinking and stop boot process.
+-	 */
+-	if ((max_uV > USB_LOW_THRESHOLD_UV &&
+-	     min_uV > USB_LOW_THRESHOLD_UV) ||
+-	     (max_uV <= USB_LOW_THRESHOLD_UV &&
+-	     min_uV <= USB_LOW_THRESHOLD_UV)) {
+-		log_notice("* ERROR USB TYPE-C connection in unattached mode   *\n");
+-		log_notice("* Check that USB TYPE-C cable is correctly plugged *\n");
+-		/* with 125ms interval, led will blink for 17.02 years ....*/
+-		nb_blink = U32_MAX;
+-	}
+-
+-	if (max_uV > USB_LOW_THRESHOLD_UV &&
+-	    max_uV <= USB_WARNING_LOW_THRESHOLD_UV &&
+-	    min_uV <= USB_LOW_THRESHOLD_UV) {
+-		log_notice("*        WARNING 500mA power supply detected       *\n");
+-		nb_blink = 2;
+-	}
+-
+-	if (max_uV > USB_WARNING_LOW_THRESHOLD_UV &&
+-	    max_uV <= USB_START_LOW_THRESHOLD_UV &&
+-	    min_uV <= USB_LOW_THRESHOLD_UV) {
+-		log_notice("*       WARNING 1.5A power supply detected        *\n");
+-		nb_blink = 3;
+-	}
+-
+-	/*
+-	 * If highest value is above 2.15 Volts that means that the USB TypeC
+-	 * supplies more than 3 Amp, this is not compliant with TypeC specification
+-	 */
+-	if (max_uV > USB_START_HIGH_THRESHOLD_UV) {
+-		log_notice("*      USB TYPE-C charger not compliant with       *\n");
+-		log_notice("*                   specification                  *\n");
+-		log_notice("****************************************************\n\n");
+-		/* with 125ms interval, led will blink for 17.02 years ....*/
+-		nb_blink = U32_MAX;
+-	} else {
+-		log_notice("*     Current too low, use a 3A power supply!      *\n");
+-		log_notice("****************************************************\n\n");
+-	}
+-
+-	led_error_blink(nb_blink);
+-
+-	return 0;
+-}
+-
+ static void sysconf_init(void)
+ {
+ 	u8 *syscfg;
+@@ -555,307 +1155,14 @@
+ 				 1000000);
+ 	if (ret) {
+ 		log_err("SYSCFG: I/O compensation failed, timeout.\n");
+-		led_error_blink(10);
+ 	}
+ 
+ 	clrbits_le32(syscfg + SYSCFG_CMPCR, SYSCFG_CMPCR_SW_CTRL);
+ }
+ 
+-static int board_stm32mp15x_dk2_init(void)
+-{
+-	ofnode node;
+-	struct gpio_desc hdmi, audio;
+-	int ret = 0;
+-
+-	/* Fix to make I2C1 usable on DK2 for touchscreen usage in kernel */
+-	node = ofnode_path("/soc/i2c@40012000/hdmi-transmitter@39");
+-	if (!ofnode_valid(node)) {
+-		log_debug("no hdmi-transmitter@39 ?\n");
+-		return -ENOENT;
+-	}
+-
+-	if (gpio_request_by_name_nodev(node, "reset-gpios", 0,
+-				       &hdmi, GPIOD_IS_OUT)) {
+-		log_debug("could not find reset-gpios\n");
+-		return -ENOENT;
+-	}
+-
+-	node = ofnode_path("/soc/i2c@40012000/cs42l51@4a");
+-	if (!ofnode_valid(node)) {
+-		log_debug("no cs42l51@4a ?\n");
+-		return -ENOENT;
+-	}
+-
+-	if (gpio_request_by_name_nodev(node, "reset-gpios", 0,
+-				       &audio, GPIOD_IS_OUT)) {
+-		log_debug("could not find reset-gpios\n");
+-		return -ENOENT;
+-	}
+-
+-	/* before power up, insure that HDMI and AUDIO IC is under reset */
+-	ret = dm_gpio_set_value(&hdmi, 1);
+-	if (ret) {
+-		log_err("can't set_value for hdmi_nrst gpio");
+-		goto error;
+-	}
+-	ret = dm_gpio_set_value(&audio, 1);
+-	if (ret) {
+-		log_err("can't set_value for audio_nrst gpio");
+-		goto error;
+-	}
+-
+-	/* power-up audio IC */
+-	regulator_autoset_by_name("v1v8_audio", NULL);
+-
+-	/* power-up HDMI IC */
+-	regulator_autoset_by_name("v1v2_hdmi", NULL);
+-	regulator_autoset_by_name("v3v3_hdmi", NULL);
+-
+-error:
+-	return ret;
+-}
+-
+-static bool board_is_stm32mp13x_dk(void)
+-{
+-	if (CONFIG_IS_ENABLED(TARGET_ST_STM32MP13x) &&
+-	     of_machine_is_compatible("st,stm32mp135f-dk"))
+-		return true;
+-
+-	return false;
+-}
+-
+-static bool board_is_stm32mp15x_dk2(void)
+-{
+-	if (CONFIG_IS_ENABLED(TARGET_ST_STM32MP15x) &&
+-	    (of_machine_is_compatible("st,stm32mp157c-dk2") ||
+-	     of_machine_is_compatible("st,stm32mp157f-dk2")))
+-		return true;
+-
+-	return false;
+-}
+-
+-static bool board_is_stm32mp15x_ev1(void)
+-{
+-	if (CONFIG_IS_ENABLED(TARGET_ST_STM32MP15x) &&
+-	    (of_machine_is_compatible("st,stm32mp157a-ev1") ||
+-	     of_machine_is_compatible("st,stm32mp157c-ev1") ||
+-	     of_machine_is_compatible("st,stm32mp157d-ev1") ||
+-	     of_machine_is_compatible("st,stm32mp157f-ev1")))
+-		return true;
+-
+-	return false;
+-}
+-
+-/* touchscreen driver: used for focaltech touchscreen detection */
+-static const struct udevice_id edt_ft6236_ids[] = {
+-	{ .compatible = "focaltech,ft6236", },
+-	{ }
+-};
+-
+-U_BOOT_DRIVER(edt_ft6236) = {
+-	.name		= "edt_ft6236",
+-	.id		= UCLASS_I2C_GENERIC,
+-	.of_match	= edt_ft6236_ids,
+-};
+-
+-/* touchscreen driver: only used for pincontrol configuration */
+-static const struct udevice_id goodix_ids[] = {
+-	{ .compatible = "goodix,gt911", },
+-	{ .compatible = "goodix,gt9147", },
+-	{ }
+-};
+-
+-U_BOOT_DRIVER(goodix) = {
+-	.name		= "goodix",
+-	.id		= UCLASS_I2C_GENERIC,
+-	.of_match	= goodix_ids,
+-};
+-
+-static int goodix_i2c_read(struct udevice *dev, u16 reg, u8 *buf, int len)
+-{
+-	struct i2c_msg msgs[2];
+-	__be16 wbuf = cpu_to_be16(reg);
+-	int ret;
+-
+-	msgs[0].flags = 0;
+-	msgs[0].addr  = 0x5d;
+-	msgs[0].len   = 2;
+-	msgs[0].buf   = (u8 *)&wbuf;
+-
+-	msgs[1].flags = I2C_M_RD;
+-	msgs[1].addr  = 0x5d;
+-	msgs[1].len   = len;
+-	msgs[1].buf   = buf;
+-
+-	ret = dm_i2c_xfer(dev, msgs, 2);
+-
+-	return ret;
+-}
+-
+-/* HELPER: search detected driver */
+-struct detect_info_t {
+-	bool (*detect)(void);
+-	struct driver *drv;
+-};
+-
+-static struct driver *detect_device(struct detect_info_t *info, u8 size)
+-{
+-	struct driver *drv = NULL;
+-	u8 i;
+-
+-	for (i = 0; i < size && !drv; i++)
+-		if (info[i].detect())
+-			drv = info[i].drv;
+-
+-	return drv;
+-}
+-
+-/* HELPER: force new driver binding, replace the existing one */
+-static void bind_driver(struct driver *drv, const char *path)
+-{
+-	ofnode node;
+-	struct udevice *dev;
+-	struct udevice *parent;
+-	int ret;
+-
+-	node = ofnode_path(path);
+-	if (!ofnode_valid(node))
+-		return;
+-	if (!ofnode_is_enabled(node))
+-		return;
+-
+-	ret = device_find_global_by_ofnode(ofnode_get_parent(node), &parent);
+-	if (!parent || ret) {
+-		log_debug("Unable to found parent. err:%d\n", ret);
+-		return;
+-	}
+-
+-	ret = device_find_global_by_ofnode(node, &dev);
+-	/* remove the driver previously binded */
+-	if (dev && !ret) {
+-		if (dev->driver == drv) {
+-			log_debug("nothing to do, %s already binded.\n", drv->name);
+-			return;
+-		}
+-		log_debug("%s unbind\n", dev->driver->name);
+-		device_remove(dev, DM_REMOVE_NORMAL);
+-		device_unbind(dev);
+-	}
+-	/* bind the new driver */
+-	ret = device_bind_with_driver_data(parent, drv, ofnode_get_name(node),
+-					   0, node, &dev);
+-	if (ret)
+-		log_debug("Unable to bind %s, err:%d\n", drv->name, ret);
+-}
+-
+-bool stm32mp15x_ev1_rm68200(void)
+-{
+-	struct udevice *dev;
+-	struct udevice *bus;
+-	struct dm_i2c_chip *chip;
+-	char id[GOODIX_ID_LEN];
+-	int ret;
+-
+-	ret = uclass_get_device_by_driver(UCLASS_I2C_GENERIC, DM_DRIVER_GET(goodix), &dev);
+-	if (ret)
+-		return false;
+-
+-	bus = dev_get_parent(dev);
+-	chip = dev_get_parent_plat(dev);
+-	ret = dm_i2c_probe(bus, chip->chip_addr, 0, &dev);
+-	if (ret)
+-		return false;
+-
+-	ret = goodix_i2c_read(dev, GOODIX_REG_ID, id, sizeof(id));
+-	if (ret)
+-		return false;
+-
+-	if (!strncmp(id, "9147", sizeof(id)))
+-		return true;
+-
+-	return false;
+-}
+-
+-bool stm32mp15x_ev1_hx8394(void)
+-{
+-	return true;
+-}
+-
+-extern U_BOOT_DRIVER(rm68200_panel);
+-extern U_BOOT_DRIVER(hx8394_panel);
+-
+-struct detect_info_t stm32mp15x_ev1_panels[] = {
+-	CONFIG_IS_ENABLED(VIDEO_LCD_RAYDIUM_RM68200,
+-			  ({ .detect = stm32mp15x_ev1_rm68200,
+-			   .drv = DM_DRIVER_REF(rm68200_panel)
+-			   },
+-			   ))
+-	CONFIG_IS_ENABLED(VIDEO_LCD_ROCKTECH_HX8394,
+-			  ({ .detect = stm32mp15x_ev1_hx8394,
+-			   .drv = DM_DRIVER_REF(hx8394_panel)
+-			   },
+-			   ))
+-};
+-
+-static void board_stm32mp15x_ev1_init(void)
+-{
+-	struct udevice *dev;
+-	struct driver *drv;
+-	struct gpio_desc reset_gpio;
+-	char path[40];
+-
+-	/* configure IRQ line on EV1 for touchscreen before LCD reset */
+-	uclass_get_device_by_driver(UCLASS_I2C_GENERIC, DM_DRIVER_GET(goodix), &dev);
+-
+-	/* get & set reset gpio for panel */
+-	uclass_get_device_by_driver(UCLASS_PANEL, DM_DRIVER_GET(rm68200_panel), &dev);
+-
+-	gpio_request_by_name(dev, "reset-gpios", 0, &reset_gpio, GPIOD_IS_OUT);
+-
+-	if (!dm_gpio_is_valid(&reset_gpio))
+-		return;
+-
+-	dm_gpio_set_value(&reset_gpio, true);
+-	mdelay(1);
+-	dm_gpio_set_value(&reset_gpio, false);
+-	mdelay(10);
+-
+-	/* auto detection of connected panel-dsi */
+-	drv = detect_device(stm32mp15x_ev1_panels, ARRAY_SIZE(stm32mp15x_ev1_panels));
+-	if (!drv)
+-		return;
+-	/* save the detected compatible in environment */
+-	env_set("panel-dsi", drv->of_match->compatible);
+-
+-	dm_gpio_free(NULL, &reset_gpio);
+-
+-	/* select the driver for the detected PANEL */
+-	ofnode_get_path(dev_ofnode(dev), path, sizeof(path));
+-	bind_driver(drv, path);
+-}
+-
+-static void board_stm32mp13x_dk_init(void)
+-{
+-	struct udevice *dev;
+-
+-	/* configure IRQ line on DK for touchscreen before LCD reset */
+-	uclass_get_device_by_driver(UCLASS_NOP, DM_DRIVER_GET(goodix), &dev);
+-}
+-
+ /* board dependent setup after realloc */
+ int board_init(void)
+ {
+-	struct udevice *dev;
+-	int ret;
+-
+-	/* probe RCC to avoid circular access with usbphyc probe as clk provider */
+-	if (IS_ENABLED(CONFIG_CLK_STM32MP13)) {
+-		ret = uclass_get_device_by_driver(UCLASS_CLK, DM_DRIVER_GET(stm32mp1_clock), &dev);
+-		log_debug("Clock init failed: %d\n", ret);
+-	}
+-
+-	board_key_check();
+-
+ 	regulators_enable_boot_on(_DEBUG);
+ 
+ 	/*
+@@ -865,10 +1172,17 @@
+ 	if (IS_ENABLED(CONFIG_ARMV7_NONSEC))
+ 		sysconf_init();
+ 
+-	if (CONFIG_IS_ENABLED(LED))
+-		led_default_state();
++        /* THOR shift register IO initialization. */
++
++	init_board_gpios_ios();
+ 
+-	setup_led(LEDST_ON);
++        /* THOR display initialization. */
++
++  #if !APP_NOUS_MK2_BOARD
++
++	init_gc9503v_display_cntrl();
++
++  #endif // #if !APP_NOUS_MK2_BOARD
+ 
+ 	return 0;
+ }
+@@ -884,15 +1198,6 @@
+ 	char dtb_name[256];
+ 	int buf_len;
+ 
+-	if (board_is_stm32mp13x_dk())
+-		board_stm32mp13x_dk_init();
+-
+-	if (board_is_stm32mp15x_ev1())
+-		board_stm32mp15x_ev1_init();
+-
+-	if (board_is_stm32mp15x_dk2())
+-		board_stm32mp15x_dk2_init();
+-
+ 	if (IS_ENABLED(CONFIG_ENV_VARS_UBOOT_RUNTIME_CONFIG)) {
+ 		fdt_compat = fdt_getprop(gd->fdt_blob, 0, "compatible",
+ 					 &fdt_compat_len);
+@@ -931,18 +1236,11 @@
+ 		uclass_foreach_dev_probe(UCLASS_ADC, dev) {
+ 			log_debug("ACD probe for calibration: %s\n", dev->name);
+ 		}
+-		/* for DK1/DK2 boards */
+-		board_check_usb_power();
+ 	}
+ 
+ 	return 0;
+ }
+ 
+-void board_quiesce_devices(void)
+-{
+-	setup_led(LEDST_OFF);
+-}
+-
+ /* CLOCK feed to PHY*/
+ #define ETH_CK_F_25M	25000000
+ #define ETH_CK_F_50M	50000000
+@@ -1379,32 +1677,6 @@
+ 	fdt_setprop_u32(new_blob, nodeoff_ov5640_ep, "remote-endpoint", phandle_stmipi_ep);
+ }
+ 
+-void stm32mp15x_dk2_fdt_update(void *new_blob)
+-{
+-	struct udevice *dev;
+-	struct udevice *bus;
+-	int nodeoff = 0;
+-	int ret;
+-
+-	ret = uclass_get_device_by_driver(UCLASS_I2C_GENERIC, DM_DRIVER_GET(edt_ft6236), &dev);
+-	if (ret)
+-		return;
+-
+-	bus = dev_get_parent(dev);
+-
+-	ret = dm_i2c_probe(bus, 0x38, 0, &dev);
+-	if (ret < 0) {
+-		nodeoff = fdt_path_offset(new_blob, "/soc/i2c@40012000/touchscreen@38");
+-		if (nodeoff < 0) {
+-			log_warning("touchscreen@2a node not found\n");
+-		} else {
+-			fdt_set_name(new_blob, nodeoff, "touchscreen@2a");
+-			fdt_setprop_u32(new_blob, nodeoff, "reg", 0x2a);
+-			log_debug("touchscreen@38 node updated to @2a\n");
+-		}
+-	}
+-}
+-
+ void fdt_update_panel_dsi(void *new_blob)
+ {
+ 	char const *panel = env_get("panel-dsi");
+@@ -1453,15 +1725,6 @@
+ 	if (CONFIG_IS_ENABLED(TARGET_ST_STM32MP15x))
+ 		stm32mp15_fdt_update_optee_nodes(blob);
+ 
+-	if (board_is_stm32mp13x_dk())
+-		stm32mp13x_dk_fdt_update(blob);
+-
+-	if (board_is_stm32mp15x_dk2())
+-		stm32mp15x_dk2_fdt_update(blob);
+-
+-	if (board_is_stm32mp15x_ev1())
+-		fdt_update_panel_dsi(blob);
+-
+ 	return 0;
+ }
+ #endif
